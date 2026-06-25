@@ -362,14 +362,13 @@ MIT License - see LICENSE file for details
 
 ## Author
 
-Your Name (@yourusername)
+HariHaranK2293
 
 ## Support
 
 For issues and questions:
 - Open GitHub Issue
-- Email: your.email@example.com
-- Discord: Join our community
+- Email: hariharank0022@gmail.com
 
 ## Acknowledgments
 
