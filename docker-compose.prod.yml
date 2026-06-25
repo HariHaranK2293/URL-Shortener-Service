@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  # Redis Cache with persistence
+  redis:
+    image: redis:7-alpine
+    container_name: url-shortener-redis-prod
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --requirepass redis_password_prod
+    volumes:
+      - redis_data_prod:/data
+    environment:
+      - REDIS_REPLICATION_MODE=master
+    networks:
+      - url-shortener-network-prod
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_password_prod", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    restart: always
+
+  # Oracle Database Production
+  oracle:
+    image: gvenzl/oracle-xe:latest
+    container_name: url-shortener-oracle-prod
+    ports:
+      - "1521:1521"
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD:-oracle_password_prod}
+      ORACLE_CHARACTERSET: AL32UTF8
+    volumes:
+      - oracle_data_prod:/opt/oracle/oradata
+      - ./init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    networks:
+      - url-shortener-network-prod
+    healthcheck:
+      test: ["CMD", "sqlplus", "-L", "system/oracle_password_prod@localhost:1521/XE", "as sysdba", "@?/rdbms/admin/sqlplus.sql"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G
+    restart: always
+
+  # Spring Boot Application - Production
+  app:
+    image: ${REGISTRY}/url-shortener:${VERSION:-latest}
+    container_name: url-shortener-app-prod
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:oracle:thin:@oracle:1521:XE
+      SPRING_DATASOURCE_USERNAME: urlshortener
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-urlshortener123}
+      SPRING_REDIS_HOST: redis
+      SPRING_REDIS_PORT: 6379
+      SPRING_REDIS_PASSWORD: redis_password_prod
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      LOGGING_LEVEL_COM_URLSHORTENER: INFO
+      SPRING_PROFILES_ACTIVE: prod
+      JAVA_OPTS: "-Xms1G -Xmx2G -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+    depends_on:
+      redis:
+        condition: service_healthy
+      oracle:
+        condition: service_healthy
+    networks:
+      - url-shortener-network-prod
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '3'
+          memory: 3G
+        reservations:
+          cpus: '2'
+          memory: 2G
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Prometheus for monitoring (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: url-shortener-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - url-shortener-network-prod
+    depends_on:
+      - app
+    restart: always
+
+volumes:
+  redis_data_prod:
+    driver: local
+  oracle_data_prod:
+    driver: local
+  prometheus_data:
+    driver: local
+
+networks:
+  url-shortener-network-prod:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
